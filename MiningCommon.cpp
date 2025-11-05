@@ -2,6 +2,13 @@
 #include <stdexcept>
 #include <fmt/core.h> // <-- ZMIANA
 #include <algorithm> // Dla std::reverse
+#include <mutex> // <-- DODANO
+
+// --- NOWA SEKCJA ---
+// Definicja globalnego mutexu
+std::mutex g_cout_mutex;
+// --- KONIEC NOWEJ SEKCJI ---
+
 
 // Funkcja pomocnicza do konwersji pojedynczego znaku hex
 uint8_t hex_char_to_byte(char c) {

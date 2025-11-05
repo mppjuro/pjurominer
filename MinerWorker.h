@@ -6,6 +6,7 @@
 #include <mutex>         // Wymagany dla std::mutex (do ochrony pracy)
 #include <optional>      // Wymagany dla std::optional (do przechowywania pracy)
 #include <string>
+#include <atomic>        // <-- DODANO
 
 /**
  * @class MinerWorker
@@ -54,6 +55,12 @@ public:
      */
     void setNewJob(const MiningJob& job);
 
+    /**
+     * @brief Pobiera całkowitą liczbę wykonanych hashów przez ten wątek.
+     * @return Liczba hashów.
+     */
+    uint64_t getHashCount() const;
+
 private:
     /**
      * @brief Główna funkcja (pętla) wykonywana przez wątek std::jthread.
@@ -62,14 +69,18 @@ private:
     void run(std::stop_token stoken);
 
     int m_id; // Identyfikator tego workera (głównie do logowania)
-    
+
     std::jthread m_thread; // Obiekt wątku (automatycznie zarządza join)
     SolutionCallback m_solution_callback; // Callback do wysyłania rozwiązań
 
     // Mutex chroniący dostęp do m_current_job
     std::mutex m_job_mutex;
-    
+
     // std::optional jest używany jako "flaga" nowej pracy.
     // Jeśli zawiera wartość, oznacza to nową pracę do pobrania.
     std::optional<MiningJob> m_current_job;
+
+    // --- NOWA SEKCJA ---
+    std::atomic<uint64_t> m_hash_count{0}; // Atomowy licznik hashów
+    // --- KONIEC NOWEJ SEKCJI ---
 };

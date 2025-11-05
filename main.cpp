@@ -6,174 +6,292 @@
 #include <thread>
 #include <atomic>
 #include <string>
-#include <cstdio>     // <-- DODANO DLA fclose
+#include <cstdio>
+#include <deque>
+#include <numeric>
+#include <iomanip>
+#include <sstream> // <-- DODANO
 #include "StratumClient.h"
 #include "MinerWorker.h"
+#include "MiningCommon.h"
 
-// --- DODANY NAGŁÓWEK DLA KONSOLI WINDOWS ---
+// --- NAGŁÓWKI KONSOLI (bez zmian) ---
 #ifdef _WIN32
 #include <windows.h>
-#include <conio.h> // <-- DODANO DLA _getch i _kbhit
+#include <conio.h>
 #else
-// --- DODANE NAGŁÓWKI DLA POSIX ---
 #include <termios.h>
 #include <unistd.h>
-#include <fcntl.h> // <-- DODANO DLA fcntl
+#include <fcntl.h>
 #endif
 // ---
 
-// --- KONFIGURACJA (bez zmian) ---
+// --- KONFIGURACJA I GLOBALS (bez zmian) ---
 const std::string POOL_HOST = "pool.supportxmr.com";
 const std::string POOL_PORT = "3333";
 const std::string YOUR_WALLET_ADDRESS = "44xLKKizoqAioFsVQtm9AbUVYW7TrJGFBcYVQErc18qcVRrW5koAK2Yh3kVvGibh8w15E5gym3n5V8RSV7Q2bSuPT7kHQ72";
 
-// --- ZMIANA: Przeniesiono globalne wskaźniki i dodano flagę atomową ---
 std::shared_ptr<StratumClient> client;
 std::vector<std::shared_ptr<MinerWorker>> workers;
 std::shared_ptr<asio::io_context> io_context;
-std::atomic_bool is_shutting_down{false}; // Flaga zapobiegająca wielokrotnemu zamykaniu
+std::atomic_bool is_shutting_down{false};
+
+std::mutex g_stats_mutex;
+std::deque<double> g_hashrate_samples;
+const size_t MAX_SAMPLES_1H = 360;
 // ---
 
-/**
- * @brief Wspólna funkcja do bezpiecznego zamykania minera.
- * Może być wywołana z wątku sygnału (Ctrl+C) lub wątku wejścia ('q').
- */
+// --- FUNKCJE POMOCNICZE (bez zmian) ---
+void print_green_line(const std::string& s) {
+    std::lock_guard<std::mutex> lock(g_cout_mutex);
+#ifdef _WIN32
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO consoleInfo;
+    WORD saved_attributes;
+    GetConsoleScreenBufferInfo(hConsole, &consoleInfo);
+    saved_attributes = consoleInfo.wAttributes;
+    SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+    std::cout << s;
+    SetConsoleTextAttribute(hConsole, saved_attributes);
+#else
+    if (isatty(STDOUT_FILENO)) {
+        std::cout << "\033[1;32m" << s << "\033[0m";
+    } else {
+        std::cout << s;
+    }
+#endif
+    std::cout.flush();
+}
+
+double calculate_average(size_t count) {
+    if (g_hashrate_samples.empty() || count == 0) {
+        return 0.0;
+    }
+    double sum = 0.0;
+    size_t num_samples = std::min(g_hashrate_samples.size(), count);
+    auto it = g_hashrate_samples.rbegin();
+    for (size_t i = 0; i < num_samples; ++i) {
+        sum += *it;
+        ++it;
+    }
+    return sum / num_samples;
+}
+
 void shutdown_miner() {
-    // Używamy exchange, aby atomowo ustawić flagę na true i pobrać jej poprzednią wartość
     bool already_shutting_down = is_shutting_down.exchange(true);
     if (already_shutting_down) {
-        return; // Już jesteśmy w trakcie zamykania
+        return;
     }
-
-    std::cout << "\nZatrzymywanie minera...\n";
-
-    // Prosimy workery o zatrzymanie
+    {
+        std::lock_guard<std::mutex> lock(g_cout_mutex);
+        std::cout << "\nZatrzymywanie minera...\n";
+        std::cout.flush();
+    }
     for (auto& worker : workers) {
         worker->stop();
     }
-
-    // Zatrzymujemy pętlę sieciową
     if (io_context) {
         io_context->stop();
     }
-
-    // --- POPRAWKA: Jawnie zamknij standardowe wejście ---
-    // To spowoduje, że std::getline() w odłączonym wątku watch_stdin_for_quit
-    // natychmiast zawiedzie, pozwalając mu bezpiecznie zakończyć działanie
-    // zanim std::cin zostanie zniszczone przez runtime.
 #ifdef _WIN32
-    _fcloseall(); // Bardziej agresywne dla Windows
+    _fcloseall();
 #else
     fclose(stdin);
 #endif
-    // --- KONIEC POPRAWKI ---
 }
 
-/**
- * @brief Handler sygnałów (np. Ctrl+C).
- */
 void signal_handler(int signum) {
-    std::cout << fmt::format("\nOtrzymano sygnał {}...", signum);
+    {
+        std::lock_guard<std::mutex> lock(g_cout_mutex);
+        std::cout << fmt::format("\nOtrzymano sygnał {}...", signum);
+    }
     shutdown_miner();
 }
+// --- KONIEC FUNKCJI POMOCNICZYCH ---
+
 
 /**
- * @brief Nowa funkcja uruchamiana w osobnym wątku do nasłuchiwania na 'q'.
- * --- ZMIANA: Implementacja dla odczytu bez Enter ---
+ * @brief Pętla raportowania Hashrate
  */
-void watch_stdin_for_quit() {
+void report_hashrate_loop(int num_threads) {
+    std::vector<uint64_t> last_hash_counts(num_threads, 0);
+    auto last_stats_time = std::chrono::steady_clock::now();
+
+    while (!is_shutting_down) {
+        auto now = std::chrono::steady_clock::now();
+        double elapsed_stats = std::chrono::duration<double>(now - last_stats_time).count();
+
+        if (elapsed_stats >= 60.0) {
+            std::vector<double> thread_hashrates;
+            double total_hashrate = 0;
+
+            if (workers.size() == num_threads) {
+                for (int i = 0; i < num_threads; ++i) {
+                    uint64_t current_count = workers[i]->getHashCount();
+                    uint64_t count_delta = current_count - last_hash_counts[i];
+                    double hashrate = count_delta / elapsed_stats;
+                    thread_hashrates.push_back(hashrate);
+                    total_hashrate += hashrate;
+                    last_hash_counts[i] = current_count;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lock(g_stats_mutex);
+                g_hashrate_samples.push_back(total_hashrate);
+                if (g_hashrate_samples.size() > MAX_SAMPLES_1H) {
+                    g_hashrate_samples.pop_front();
+                }
+            }
+
+            // --- ZMIANA: Zbuduj string PRZED blokadą ---
+            std::stringstream ss;
+            ss << fmt::format("[HASHRATE] Total: {:.2f} H/s | Wątki: [", total_hashrate);
+            for (size_t i = 0; i < thread_hashrates.size(); ++i) {
+                ss << fmt::format("{:.1f}{}", thread_hashrates[i], (i == thread_hashrates.size() - 1) ? "" : ", ");
+            }
+            ss << "]\n";
+            // --- Koniec budowania stringa ---
+
+            {
+                std::lock_guard<std::mutex> lock(g_cout_mutex);
+                std::cout << ss.str(); // Wypisz gotowy string
+                std::cout.flush();
+            }
+
+            last_stats_time = now;
+        }
+
+        if (is_shutting_down.load()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+
+/**
+ * @brief Pętla sprawdzania klawiatury
+ */
+void watch_stdin() {
 #ifdef _WIN32
     int ch;
     while (!is_shutting_down) {
-        if (_kbhit()) { // Sprawdź, czy klawisz jest wciśnięty
-            ch = _getch(); // Pobierz znak bez echa
+        if (_kbhit()) {
+            ch = _getch();
             if (ch == 'q' || ch == 'Q') {
-                std::cout << "\nWykryto 'q', zamykanie...\n";
                 shutdown_miner();
-                break; // Zakończ pętlę i wątek
+                break;
+            }
+            if (ch == 's' || ch == 'S') {
+                double avg_1m, avg_15m, avg_1h;
+                {
+                    std::lock_guard<std::mutex> lock(g_stats_mutex);
+                    avg_1m = calculate_average(6);
+                    avg_15m = calculate_average(90);
+                    avg_1h = calculate_average(360);
+                }
+
+                // --- ZMIANA: Zbuduj string PRZED blokadą ---
+                std::string stats_report = "\n--- STATYSTYKI ---\n";
+                stats_report += fmt::format(" Średnia (1m):   {:.2f} H/s\n", avg_1m);
+                stats_report += fmt::format(" Średnia (15m):  {:.2f} H/s\n", avg_15m);
+                stats_report += fmt::format(" Średnia (1h):   {:.2f} H/s\n", avg_1h);
+                stats_report += "------------------\n";
+                // --- Koniec budowania stringa ---
+
+                {
+                    std::lock_guard<std::mutex> cout_lock(g_cout_mutex);
+                    std::cout << stats_report; // Wypisz gotowy string
+                    std::cout.flush();
+                }
             }
         }
-        if (is_shutting_down.load()) break; // Sprawdź ponownie, czy nie zamknięto przez Ctrl+C
-        // Śpij krótko, aby nie marnować CPU w pętli
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (is_shutting_down.load()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 #else
     // Wersja POSIX (Linux/macOS)
-
-    // Zapisz stare ustawienia terminala
     struct termios old_tio, new_tio;
-    if (tcgetattr(STDIN_FILENO, &old_tio) != 0) return; // Nie udało się pobrać ustawień
+    if (tcgetattr(STDIN_FILENO, &old_tio) != 0) return;
     new_tio = old_tio;
-
-    // Wyłącz tryb kanoniczny (bez buforowania linii) i echo
     new_tio.c_lflag &= ~(ICANON | ECHO);
-
-    // Ustaw nowe atrybuty
-    if (tcsetattr(STDIN_FILENO, TCSANOW, &new_tio) != 0) return; // Nie udało się ustawić
-
-    // Ustaw STDIN na non-blocking
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &new_tio) != 0) return;
     int old_fcntl = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, old_fcntl | O_NONBLOCK);
 
     char c;
     while (!is_shutting_down) {
-        // Próba odczytu jednego znaku
         ssize_t n = read(STDIN_FILENO, &c, 1);
-
-        if (n > 0) { // Odczytano znak
+        if (n > 0) {
             if (c == 'q' || c == 'Q') {
-                std::cout << "\nWykryto 'q', zamykanie...\n";
                 shutdown_miner();
                 break;
             }
-        } else if (n == 0) { // EOF, np. po zamknięciu stdin przez shutdown_miner()
+            if (c == 's' || c == 'S') {
+                double avg_1m, avg_15m, avg_1h;
+                {
+                    std::lock_guard<std::mutex> lock(g_stats_mutex);
+                    avg_1m = calculate_average(6);
+                    avg_15m = calculate_average(90);
+                    avg_1h = calculate_average(360);
+                }
+
+                // --- ZMIANA: Zbuduj string PRZED blokadą ---
+                std::string stats_report = "\n--- STATYSTYKI ---\n";
+                stats_report += fmt::format(" Średnia (1m):   {:.2f} H/s\n", avg_1m);
+                stats_report += fmt::format(" Średnia (15m):  {:.2f} H/s\n", avg_15m);
+                stats_report += fmt::format(" Średnia (1h):   {:.2f} H/s\n", avg_1h);
+                stats_report += "------------------\n";
+                // --- Koniec budowania stringa ---
+
+                {
+                    std::lock_guard<std::mutex> cout_lock(g_cout_mutex);
+                    std::cout << stats_report; // Wypisz gotowy string
+                    std::cout.flush();
+                }
+            }
+        } else if (n == 0) {
              break;
         }
-        // Jeśli n < 0 (i errno to EAGAIN/EWOULDBLOCK), to po prostu nic nie ma
-
         if (is_shutting_down.load()) break;
-
-        // Śpij krótko, aby nie marnować CPU
-        std.this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-
-    // Przywróć stare ustawienia terminala
     tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
-    // Przywróć stary tryb fcntl
     fcntl(STDIN_FILENO, F_SETFL, old_fcntl);
 #endif
-    // Wątek kończy się tutaj
 }
 
+
+/**
+ * @brief Główna funkcja programu
+ */
 int main() {
-    // --- DODANE LINIE DLA KONSOLI WINDOWS ---
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
-    // ---
 
+    // Ta sekcja jest OK, jednowątkowa
     if (YOUR_WALLET_ADDRESS == "TUTAJ_WKLEJ_SWOJ_ADRES_MONERO") {
         std::cerr << "BŁĄD: Musisz edytować main.cpp i podać swój adres portfela Monero.\n";
         return 1;
     }
-
-    // Rejestrujemy handlery sygnałów
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
-
     int num_threads = std::max(1u, std::thread::hardware_concurrency() - 1);
     if (num_threads == 0) num_threads = 1;
-
     std::cout << "--- Mój CPU Miner (Szkielet C++23) ---\n";
     std::cout << fmt::format(" Adres puli: {}:{}\n", POOL_HOST, POOL_PORT);
     std::cout << fmt::format(" Portfel: {}\n", YOUR_WALLET_ADDRESS);
     std::cout << fmt::format(" Uruchamiam {} wątków roboczych.\n", num_threads);
-    std::cout << "\nNaciśnij 'q', aby zakończyć.\n\n"; // <-- ZMIENIONO INSTRUKCJĘ
+    std::cout << "\nNaciśnij 'q', aby zakończyć, 's' aby zobaczyć statystyki.\n\n";
+    // Koniec sekcji jednowątkowej
 
     io_context = std::make_shared<asio::io_context>();
     workers.reserve(num_threads);
 
     auto job_callback = [&](const MiningJob& job) {
+        std::lock_guard<std::mutex> lock(g_cout_mutex);
+        std::cout << fmt::format("\n[MANAGER] Rozdzielam nową pracę: {} (Seed: ...{})\n",
+                                 job.job_id,
+                                 job.seed_hash.substr(job.seed_hash.length() - 6));
         for (auto& worker : workers) {
             worker->setNewJob(job);
         }
@@ -185,8 +303,13 @@ int main() {
         }
     };
 
+    auto accepted_share_callback = []() {
+        print_green_line(fmt::format("[Stratum] Share zaakceptowany! :-)\n"));
+    };
+
     client = std::make_shared<StratumClient>(
-            *io_context, POOL_HOST, POOL_PORT, YOUR_WALLET_ADDRESS, job_callback
+            *io_context, POOL_HOST, POOL_PORT, YOUR_WALLET_ADDRESS, job_callback,
+            accepted_share_callback
     );
 
     for (int i = 0; i < num_threads; ++i) {
@@ -195,23 +318,19 @@ int main() {
         worker->start();
     }
 
-    // --- DODANO WĄTEK NASŁUCHUJĄCY NA WEJŚCIE ---
-    // Uruchamiamy wątek i go "odłączamy" (detach),
-    // aby nie blokował głównego programu na zamknięcie.
-    // Nasza nowa logika w shutdown_miner() zapewni, że ten wątek
-    // zakończy się bezpiecznie.
-    std::thread input_thread(watch_stdin_for_quit);
+    std::thread input_thread(watch_stdin);
     input_thread.detach();
-    // ---
+
+    std::thread hashrate_thread(report_hashrate_loop, num_threads);
+    hashrate_thread.detach();
 
     client->connect();
-    io_context->run(); // Blokuje, dopóki shutdown_miner() nie wywoła stop()
+    io_context->run();
 
-    std::cout << "Pętla sieciowa zatrzymana. Czekanie na wątki robocze...\n";
-
-    // Destruktory jthread (w wektorze 'workers') automatycznie poczekają (join)
-    // na zakończenie każdego wątku roboczego tutaj, gdy 'workers' wychodzi z zasięgu.
-
-    std::cout << "Wszystkie wątki zatrzymane. Zamykanie.\n";
+    {
+        std::lock_guard<std::mutex> lock(g_cout_mutex);
+        std::cout << "Pętla sieciowa zatrzymana. Czekanie na wątki robocze...\n";
+        std::cout << "Wszystkie wątki zatrzymane. Zamykanie.\n";
+    }
     return 0;
 }

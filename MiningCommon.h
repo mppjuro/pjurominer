@@ -3,6 +3,7 @@
 #include <string>
 #include <cstdint>
 #include <vector>
+#include <mutex> // <-- DODANO
 
 /**
  * @struct MiningJob
@@ -25,6 +26,12 @@ struct Solution {
     uint32_t nonce;
     std::string result_hash; // Hash w formacie hex
 };
+
+// --- NOWA SEKCJA ---
+// Globalny mutex chroniący std::cout i std::cerr
+// Zadeklarowany tutaj, zdefiniowany w MiningCommon.cpp
+extern std::mutex g_cout_mutex;
+// --- KONIEC NOWEJ SEKCJI ---
 
 
 // --- NOWE FUNKCJE POMOCNICZE ---

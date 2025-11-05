@@ -4,6 +4,8 @@
 #include <memory>       // Dla std::shared_ptr i std::enable_shared_from_this
 #include <functional>   // Dla std::function (callback)
 #include <atomic>       // Dla std::atomic (licznik ID zapytań)
+#include <set>          // <-- DODANO
+#include <mutex>        // <-- DODANO
 
 #include <asio.hpp>               // Główny plik nagłówkowy Asio
 #include <nlohmann/json.hpp>      // Biblioteka do obsługi JSON
@@ -30,6 +32,15 @@ public:
      */
     using JobCallback = std::function<void(const MiningJob&)>;
 
+    // --- NOWA SEKCJA ---
+    /**
+     * @brief Definicja typu dla funkcji zwrotnej (callback),
+     * wywoływanej po pomyślnym zaakceptowaniu rozwiązania (share).
+     */
+    using AcceptedShareCallback = std::function<void()>;
+    // --- KONIEC NOWEJ SEKCJI ---
+
+
     /**
      * @brief Konstruktor.
      * @param io_context Referencja do głównej pętli zdarzeń Asio.
@@ -37,12 +48,14 @@ public:
      * @param port Port serwera puli.
      * @param user Adres portfela (login).
      * @param job_cb Funkcja callback do przekazywania nowych zadań.
+     * @param share_cb Funkcja callback dla zaakceptowanych udziałów.
      */
     StratumClient(asio::io_context& io_context,
                   const std::string& host,
                   const std::string& port,
                   const std::string& user,
-                  JobCallback job_cb);
+                  JobCallback job_cb,
+                  AcceptedShareCallback share_cb); // <-- ZMODYFIKOWANO
 
     /**
      * @brief Inicjuje proces łączenia z serwerem.
@@ -121,6 +134,12 @@ private:
 
     // Stan i logika
     JobCallback m_job_callback;     // Callback dla nowych zadań
+    AcceptedShareCallback m_accepted_share_callback; // <-- DODANO
     std::atomic<int> m_request_id;  // Licznik dla ID zapytań JSON-RPC
     std::string m_login_id;         // ID sesji/subskrypcji otrzymane z puli
+
+    // --- NOWA SEKCJA ---
+    std::mutex m_state_mutex; // Chroni m_submitted_share_ids
+    std::set<int> m_submitted_share_ids; // Przechowuje ID wysłanych zapytań 'submit'
+    // --- KONIEC NOWEJ SEKCJI ---
 };
