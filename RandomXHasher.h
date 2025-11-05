@@ -7,31 +7,32 @@
 
 /**
  * @class RandomXHasher
- * @brief Klasa opakowująca (wrapper) dla libRandomX.
- * Zarządza stanem Cache i VM dla jednego wątku w trybie "light".
+ * @brief Klasa opakowująca (wrapper) dla JEDNEJ instancji RandomX VM.
+ * Ta klasa jest lekka i przeznaczona do użytku w jednym wątku.
+ * NIE posiada już cache'a ani datasetu - korzysta ze współdzielonych.
  */
 class RandomXHasher {
 public:
     /**
-     * @brief Konstruktor. Alokuje Cache i VM.
+     * @brief Konstruktor.
      */
     RandomXHasher();
 
     /**
-     * @brief Destruktor. Zwalnia zasoby RandomX.
+     * @brief Destruktor. Zwalnia VM.
      */
     ~RandomXHasher();
 
-    // Usuwamy konstruktory kopiujące, aby uniknąć problemów z zasobami
+    // Usuwamy konstruktory kopiujące
     RandomXHasher(const RandomXHasher&) = delete;
     RandomXHasher& operator=(const RandomXHasher&) = delete;
 
     /**
-     * @brief Aktualizuje "seed" dla Cache, jeśli jest nowy.
-     * To jest wolna operacja i powinna być wywoływana tylko przy zmianie seeda.
-     * @param seed_hash_hex Nowy seed z puli (32 bajty hex).
+     * @brief Tworzy (lub odtwarza) maszynę wirtualną (VM).
+     * @param cache Wskaźnik do współdzielonego cache'a.
+     * @param dataset Wskaźnik do współdzielonego datasetu (Tryb Szybki).
      */
-    void updateSeed(const std::string& seed_hash_hex);
+    void create_vm(randomx_cache* cache, randomx_dataset* dataset);
 
     /**
      * @brief Haszuje blob przy użyciu danego nonce.
@@ -42,7 +43,5 @@ public:
     std::string hash(const std::string& blob_hex, uint32_t nonce);
 
 private:
-    std::string m_current_seed_hex; // Przechowuje ostatnio użyty seed
-    randomx_cache* m_cache = nullptr; // Wskaźnik na RandomX Cache
     randomx_vm* m_vm = nullptr;     // Wskaźnik na maszynę wirtualną RandomX
 };

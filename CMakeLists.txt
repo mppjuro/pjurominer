@@ -27,6 +27,7 @@ FetchContent_MakeAvailable(asio)
 # 3. Biblioteka libRandomX
 FetchContent_Declare(
         RandomX
+
         GIT_REPOSITORY
         https://github.com/tevador/RandomX.git
         GIT_TAG v1.2.1 # Możesz użyć nowszej wersji
@@ -45,17 +46,21 @@ FetchContent_MakeAvailable(fmt)
 # --- KONIEC NOWEJ SEKCJI (fmt) ---
 
 
-# --- ZMIANA NAZWY PLIKÓW ---
-# Zmieniamy RandomXStub na MiningCommon (dla funkcji pomocniczych)
-# Dodajemy nowy RandomXHasher
+# --- ZMIANA W PLIKACH ---
 add_executable(pjurominer
         main.cpp
         StratumClient.cpp
+        StratumClient.h
+
         MinerWorker.cpp
+        MinerWorker.h
         MiningCommon.cpp
-        RandomXHasher.cpp
+        MiningCommon.h
         RandomXHasher.cpp
         RandomXHasher.h
+        # DODANO NOWE PLIKI
+        RandomXManager.cpp
+        RandomXManager.h
 )
 
 # --- ZMIANY W LINKOWANIU ---
@@ -70,6 +75,7 @@ target_link_libraries(pjurominer
 
 # Musimy dodać ścieżki dołączania (include)
 target_include_directories(pjurominer
+
         PRIVATE
         ${asio_SOURCE_DIR}/asio/include
         ${randomx_SOURCE_DIR}/src # Ścieżka do randomx.h

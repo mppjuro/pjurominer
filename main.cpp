@@ -10,10 +10,11 @@
 #include <deque>
 #include <numeric>
 #include <iomanip>
-#include <sstream> // <-- DODANO
+#include <sstream>
 #include "StratumClient.h"
 #include "MinerWorker.h"
 #include "MiningCommon.h"
+#include "RandomXManager.h" // <-- DODANO
 
 // --- NAGŁÓWKI KONSOLI (bez zmian) ---
 #ifdef _WIN32
@@ -26,7 +27,7 @@
 #endif
 // ---
 
-// --- KONFIGURACJA I GLOBALS (bez zmian) ---
+// --- KONFIGURACJA I GLOBALS (zmiany) ---
 const std::string POOL_HOST = "pool.supportxmr.com";
 const std::string POOL_PORT = "3333";
 const std::string YOUR_WALLET_ADDRESS = "44xLKKizoqAioFsVQtm9AbUVYW7TrJGFBcYVQErc18qcVRrW5koAK2Yh3kVvGibh8w15E5gym3n5V8RSV7Q2bSuPT7kHQ72";
@@ -35,6 +36,10 @@ std::shared_ptr<StratumClient> client;
 std::vector<std::shared_ptr<MinerWorker>> workers;
 std::shared_ptr<asio::io_context> io_context;
 std::atomic_bool is_shutting_down{false};
+
+// --- NOWY GLOBALNY MANAGER ---
+std::shared_ptr<RandomXManager> g_rx_manager;
+// ---
 
 std::mutex g_stats_mutex;
 std::deque<double> g_hashrate_samples;
@@ -111,7 +116,7 @@ void signal_handler(int signum) {
 
 
 /**
- * @brief Pętla raportowania Hashrate
+ * @brief Pętla raportowania Hashrate (bez zmian)
  */
 void report_hashrate_loop(int num_threads) {
     std::vector<uint64_t> last_hash_counts(num_threads, 0);
@@ -143,18 +148,16 @@ void report_hashrate_loop(int num_threads) {
                 }
             }
 
-            // --- ZMIANA: Zbuduj string PRZED blokadą ---
             std::stringstream ss;
             ss << fmt::format("[HASHRATE] Total: {:.2f} H/s | Wątki: [", total_hashrate);
             for (size_t i = 0; i < thread_hashrates.size(); ++i) {
                 ss << fmt::format("{:.1f}{}", thread_hashrates[i], (i == thread_hashrates.size() - 1) ? "" : ", ");
             }
             ss << "]\n";
-            // --- Koniec budowania stringa ---
 
             {
                 std::lock_guard<std::mutex> lock(g_cout_mutex);
-                std::cout << ss.str(); // Wypisz gotowy string
+                std::cout << ss.str();
                 std::cout.flush();
             }
 
@@ -168,7 +171,7 @@ void report_hashrate_loop(int num_threads) {
 
 
 /**
- * @brief Pętla sprawdzania klawiatury
+ * @brief Pętla sprawdzania klawiatury (bez zmian)
  */
 void watch_stdin() {
 #ifdef _WIN32
@@ -188,18 +191,14 @@ void watch_stdin() {
                     avg_15m = calculate_average(90);
                     avg_1h = calculate_average(360);
                 }
-
-                // --- ZMIANA: Zbuduj string PRZED blokadą ---
                 std::string stats_report = "\n--- STATYSTYKI ---\n";
                 stats_report += fmt::format(" Średnia (1m):   {:.2f} H/s\n", avg_1m);
                 stats_report += fmt::format(" Średnia (15m):  {:.2f} H/s\n", avg_15m);
                 stats_report += fmt::format(" Średnia (1h):   {:.2f} H/s\n", avg_1h);
                 stats_report += "------------------\n";
-                // --- Koniec budowania stringa ---
-
                 {
                     std::lock_guard<std::mutex> cout_lock(g_cout_mutex);
-                    std::cout << stats_report; // Wypisz gotowy string
+                    std::cout << stats_report;
                     std::cout.flush();
                 }
             }
@@ -233,18 +232,14 @@ void watch_stdin() {
                     avg_15m = calculate_average(90);
                     avg_1h = calculate_average(360);
                 }
-
-                // --- ZMIANA: Zbuduj string PRZED blokadą ---
                 std::string stats_report = "\n--- STATYSTYKI ---\n";
                 stats_report += fmt::format(" Średnia (1m):   {:.2f} H/s\n", avg_1m);
                 stats_report += fmt::format(" Średnia (15m):  {:.2f} H/s\n", avg_15m);
                 stats_report += fmt::format(" Średnia (1h):   {:.2f} H/s\n", avg_1h);
                 stats_report += "------------------\n";
-                // --- Koniec budowania stringa ---
-
                 {
                     std::lock_guard<std::mutex> cout_lock(g_cout_mutex);
-                    std::cout << stats_report; // Wypisz gotowy string
+                    std::cout << stats_report;
                     std::cout.flush();
                 }
             }
@@ -268,30 +263,54 @@ int main() {
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
-    // Ta sekcja jest OK, jednowątkowa
     if (YOUR_WALLET_ADDRESS == "TUTAJ_WKLEJ_SWOJ_ADRES_MONERO") {
         std::cerr << "BŁĄD: Musisz edytować main.cpp i podać swój adres portfela Monero.\n";
         return 1;
     }
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
-    int num_threads = std::max(1u, std::thread::hardware_concurrency() - 1);
-    if (num_threads == 0) num_threads = 1;
+
+    // --- ZMIANA: Optymalna liczba wątków dla RandomX ---
+    // Dzielimy przez 2, aby uzyskać liczbę fizycznych rdzeni (1 wątek na rdzeń)
+    int num_threads = std::max(1u, std::thread::hardware_concurrency() / 2);
+    // --- KONIEC ZMIANY ---
+
     std::cout << "--- Mój CPU Miner (Szkielet C++23) ---\n";
     std::cout << fmt::format(" Adres puli: {}:{}\n", POOL_HOST, POOL_PORT);
     std::cout << fmt::format(" Portfel: {}\n", YOUR_WALLET_ADDRESS);
-    std::cout << fmt::format(" Uruchamiam {} wątków roboczych.\n", num_threads);
+    std::cout << fmt::format(" Uruchamiam {} wątków roboczych (1 na fizyczny rdzeń).\n", num_threads);
+    std::cout << "\nWAŻNE: Upewnij się, że masz ustawione 'Large Pages' (Blokuj strony w pamięci)!\n";
+    std::cout << "Windows: 'gpedit.msc' -> Zasady Lokalne -> Przypisywanie praw -> 'Blokuj strony w pamięci' (i restart).\n";
+    std::cout << "Linux: 'sudo sysctl -w vm.nr_hugepages=...' (wymagane > 1100 stron 2MB).\n";
     std::cout << "\nNaciśnij 'q', aby zakończyć, 's' aby zobaczyć statystyki.\n\n";
-    // Koniec sekcji jednowątkowej
+
+    try {
+        g_rx_manager = std::make_shared<RandomXManager>();
+    } catch (const std::exception& e) {
+        std::cerr << fmt::format("Krytyczny błąd inicjalizacji RandomX: {}\n", e.what());
+        return 1;
+    }
 
     io_context = std::make_shared<asio::io_context>();
     workers.reserve(num_threads);
 
     auto job_callback = [&](const MiningJob& job) {
-        std::lock_guard<std::mutex> lock(g_cout_mutex);
-        std::cout << fmt::format("\n[MANAGER] Rozdzielam nową pracę: {} (Seed: ...{})\n",
-                                 job.job_id,
-                                 job.seed_hash.substr(job.seed_hash.length() - 6));
+        bool seed_changed = g_rx_manager->updateSeed(job.seed_hash);
+
+        if (seed_changed) {
+            {
+                std::lock_guard<std::mutex> lock(g_cout_mutex);
+                std::cout << fmt::format("\n[MANAGER] Globalny Dataset zaktualizowany do seeda: ...{}\n",
+                                         job.seed_hash.substr(job.seed_hash.length() - 6));
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(g_cout_mutex);
+            std::cout << fmt::format("\n[MANAGER] Rozdzielam nową pracę: {} (Seed: ...{})\n",
+                                     job.job_id,
+                                     job.seed_hash.substr(job.seed_hash.length() - 6));
+        }
         for (auto& worker : workers) {
             worker->setNewJob(job);
         }
@@ -313,7 +332,7 @@ int main() {
     );
 
     for (int i = 0; i < num_threads; ++i) {
-        auto worker = std::make_shared<MinerWorker>(i, solution_callback);
+        auto worker = std::make_shared<MinerWorker>(i, solution_callback, g_rx_manager);
         workers.push_back(worker);
         worker->start();
     }
