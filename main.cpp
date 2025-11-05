@@ -9,7 +9,7 @@
 // --- KONFIGURACJA (bez zmian) ---
 const std::string POOL_HOST = "pool.supportxmr.com";
 const std::string POOL_PORT = "3333";
-const std::string YOUR_WALLET_ADDRESS = "TUTAJ_WKLEJ_SWOJ_ADRES_MONERO";
+const std::string YOUR_WALLET_ADDRESS = "44xLKKizoqAioFsVQtm9AbUVYW7TrJGFBcYVQErc18qcVRrW5koAK2Yh3kVvGibh8w15E5gym3n5V8RSV7Q2bSuPT7kHQ72";
 
 // Globalne wskaźniki (bez zmian)
 std::shared_ptr<StratumClient> client;

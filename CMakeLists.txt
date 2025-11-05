@@ -10,7 +10,8 @@ include(FetchContent)
 FetchContent_Declare(
         nlohmann_json
         GIT_REPOSITORY https://github.com/nlohmann/json.git
-        GIT_TAG v3.11.2
+        # GIT_TAG v3.12.0
+        GIT_TAG develop
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
@@ -27,7 +28,7 @@ FetchContent_MakeAvailable(asio)
 FetchContent_Declare(
         RandomX
         GIT_REPOSITORY https://github.com/tevador/RandomX.git
-        GIT_TAG v1.2.0 # Możesz użyć nowszej wersji
+        GIT_TAG v1.2.1 # Możesz użyć nowszej wersji
 )
 FetchContent_MakeAvailable(RandomX)
 # --- KONIEC NOWEJ SEKCJI ---
