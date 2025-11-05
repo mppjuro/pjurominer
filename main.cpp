@@ -3,15 +3,22 @@
 #include <memory>
 #include <csignal>
 #include <fmt/core.h>
-#include <thread>     // <-- DODANO
-#include <atomic>     // <-- DODANO
-#include <string>     // <-- DODANO
+#include <thread>
+#include <atomic>
+#include <string>
+#include <cstdio>     // <-- DODANO DLA fclose
 #include "StratumClient.h"
 #include "MinerWorker.h"
 
 // --- DODANY NAGŁÓWEK DLA KONSOLI WINDOWS ---
 #ifdef _WIN32
 #include <windows.h>
+#include <conio.h> // <-- DODANO DLA _getch i _kbhit
+#else
+// --- DODANE NAGŁÓWKI DLA POSIX ---
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h> // <-- DODANO DLA fcntl
 #endif
 // ---
 
@@ -49,6 +56,17 @@ void shutdown_miner() {
     if (io_context) {
         io_context->stop();
     }
+
+    // --- POPRAWKA: Jawnie zamknij standardowe wejście ---
+    // To spowoduje, że std::getline() w odłączonym wątku watch_stdin_for_quit
+    // natychmiast zawiedzie, pozwalając mu bezpiecznie zakończyć działanie
+    // zanim std::cin zostanie zniszczone przez runtime.
+#ifdef _WIN32
+    _fcloseall(); // Bardziej agresywne dla Windows
+#else
+    fclose(stdin);
+#endif
+    // --- KONIEC POPRAWKI ---
 }
 
 /**
@@ -61,16 +79,70 @@ void signal_handler(int signum) {
 
 /**
  * @brief Nowa funkcja uruchamiana w osobnym wątku do nasłuchiwania na 'q'.
+ * --- ZMIANA: Implementacja dla odczytu bez Enter ---
  */
 void watch_stdin_for_quit() {
-    std::string line;
-    while (std::getline(std::cin, line)) {
-        if (line == "q") {
-            std::cout << "Wykryto 'q', zamykanie...";
-            shutdown_miner();
-            break;
+#ifdef _WIN32
+    int ch;
+    while (!is_shutting_down) {
+        if (_kbhit()) { // Sprawdź, czy klawisz jest wciśnięty
+            ch = _getch(); // Pobierz znak bez echa
+            if (ch == 'q' || ch == 'Q') {
+                std::cout << "\nWykryto 'q', zamykanie...\n";
+                shutdown_miner();
+                break; // Zakończ pętlę i wątek
+            }
         }
+        if (is_shutting_down.load()) break; // Sprawdź ponownie, czy nie zamknięto przez Ctrl+C
+        // Śpij krótko, aby nie marnować CPU w pętli
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+#else
+    // Wersja POSIX (Linux/macOS)
+
+    // Zapisz stare ustawienia terminala
+    struct termios old_tio, new_tio;
+    if (tcgetattr(STDIN_FILENO, &old_tio) != 0) return; // Nie udało się pobrać ustawień
+    new_tio = old_tio;
+
+    // Wyłącz tryb kanoniczny (bez buforowania linii) i echo
+    new_tio.c_lflag &= ~(ICANON | ECHO);
+
+    // Ustaw nowe atrybuty
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &new_tio) != 0) return; // Nie udało się ustawić
+
+    // Ustaw STDIN na non-blocking
+    int old_fcntl = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, old_fcntl | O_NONBLOCK);
+
+    char c;
+    while (!is_shutting_down) {
+        // Próba odczytu jednego znaku
+        ssize_t n = read(STDIN_FILENO, &c, 1);
+
+        if (n > 0) { // Odczytano znak
+            if (c == 'q' || c == 'Q') {
+                std::cout << "\nWykryto 'q', zamykanie...\n";
+                shutdown_miner();
+                break;
+            }
+        } else if (n == 0) { // EOF, np. po zamknięciu stdin przez shutdown_miner()
+             break;
+        }
+        // Jeśli n < 0 (i errno to EAGAIN/EWOULDBLOCK), to po prostu nic nie ma
+
+        if (is_shutting_down.load()) break;
+
+        // Śpij krótko, aby nie marnować CPU
+        std.this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    // Przywróć stare ustawienia terminala
+    tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
+    // Przywróć stary tryb fcntl
+    fcntl(STDIN_FILENO, F_SETFL, old_fcntl);
+#endif
+    // Wątek kończy się tutaj
 }
 
 int main() {
@@ -96,7 +168,7 @@ int main() {
     std::cout << fmt::format(" Adres puli: {}:{}\n", POOL_HOST, POOL_PORT);
     std::cout << fmt::format(" Portfel: {}\n", YOUR_WALLET_ADDRESS);
     std::cout << fmt::format(" Uruchamiam {} wątków roboczych.\n", num_threads);
-    std::cout << "\nWpisz 'q' i naciśnij Enter, aby zakończyć.\n\n"; // <-- DODANO INSTRUKCJĘ
+    std::cout << "\nNaciśnij 'q', aby zakończyć.\n\n"; // <-- ZMIENIONO INSTRUKCJĘ
 
     io_context = std::make_shared<asio::io_context>();
     workers.reserve(num_threads);
@@ -126,7 +198,8 @@ int main() {
     // --- DODANO WĄTEK NASŁUCHUJĄCY NA WEJŚCIE ---
     // Uruchamiamy wątek i go "odłączamy" (detach),
     // aby nie blokował głównego programu na zamknięcie.
-    // Zostanie on siłowo zakończony przez system, gdy main() się zakończy.
+    // Nasza nowa logika w shutdown_miner() zapewni, że ten wątek
+    // zakończy się bezpiecznie.
     std::thread input_thread(watch_stdin_for_quit);
     input_thread.detach();
     // ---
