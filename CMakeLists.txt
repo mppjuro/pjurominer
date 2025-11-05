@@ -23,15 +23,26 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(asio)
 
-# --- NOWA SEKCJA ---
+# --- NOWA SEKCJA (libRandomX) ---
 # 3. Biblioteka libRandomX
 FetchContent_Declare(
         RandomX
-        GIT_REPOSITORY https://github.com/tevador/RandomX.git
+        GIT_REPOSITORY
+        https://github.com/tevador/RandomX.git
         GIT_TAG v1.2.1 # Możesz użyć nowszej wersji
 )
 FetchContent_MakeAvailable(RandomX)
 # --- KONIEC NOWEJ SEKCJI ---
+
+# --- NOWA SEKCJA (fmt) ---
+# 4. Biblioteka fmt
+FetchContent_Declare(
+        fmt
+        GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+        GIT_TAG 12.1.0
+)
+FetchContent_MakeAvailable(fmt)
+# --- KONIEC NOWEJ SEKCJI (fmt) ---
 
 
 # --- ZMIANA NAZWY PLIKÓW ---
@@ -49,9 +60,11 @@ add_executable(pjurominer
 
 # --- ZMIANY W LINKOWANIU ---
 target_link_libraries(pjurominer
+
         PRIVATE
         nlohmann_json::nlohmann_json
         randomx # Linkujemy libRandomX
+        fmt::fmt # Linkujemy libfmt
         ws2_32
 )
 
@@ -60,6 +73,7 @@ target_include_directories(pjurominer
         PRIVATE
         ${asio_SOURCE_DIR}/asio/include
         ${randomx_SOURCE_DIR}/src # Ścieżka do randomx.h
+        ${fmt_SOURCE_DIR}/include # Ścieżka do nagłówków fmt
 )
 # --- KONIEC ZMIAN W LINKOWANIU ---
 

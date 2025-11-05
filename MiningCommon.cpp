@@ -1,6 +1,6 @@
 #include "MiningCommon.h"
 #include <stdexcept>
-#include <format>
+#include <fmt/core.h> // <-- ZMIANA
 #include <algorithm> // Dla std::reverse
 
 // Funkcja pomocnicza do konwersji pojedynczego znaku hex
@@ -27,7 +27,7 @@ std::string bytes_to_hex(const uint8_t* bytes, size_t size) {
     std::string hex_str;
     hex_str.reserve(size * 2);
     for (size_t i = 0; i < size; ++i) {
-        hex_str += std::format("{:02x}", bytes[i]);
+        hex_str += fmt::format("{:02x}", bytes[i]); // <-- ZMIANA
     }
     return hex_str;
 }

@@ -1,14 +1,14 @@
 #include "MinerWorker.h"
 #include <iostream>
-#include <format>
+#include <fmt/core.h>
 #include "RandomXHasher.h"
 #include "MiningCommon.h"
 /**
  * @brief Konstruktor. Inicjalizuje ID i callback.
  */
 MinerWorker::MinerWorker(int id, SolutionCallback callback)
-    : m_id(id),
-      m_solution_callback(std::move(callback)) {
+        : m_id(id),
+          m_solution_callback(std::move(callback)) {
     // m_thread jest domyślnie konstruowany (bez uruchamiania)
 }
 
@@ -31,7 +31,7 @@ void MinerWorker::start() {
     // lub (jak tutaj) wskaźnik do metody klasy.
     // std::jthread automatycznie przekaże stop_token do funkcji 'run'.
     m_thread = std::jthread([this](std::stop_token st){ this->run(st); });
-    std::cout << std::format("[Worker {}] Uruchomiony.\n", m_id);
+    std::cout << fmt::format("[Worker {}] Uruchomiony.\n", m_id);
 }
 
 /**
@@ -50,9 +50,9 @@ void MinerWorker::setNewJob(const MiningJob& job) {
     // Blokujemy mutex, aby bezpiecznie zaktualizować m_current_job
     std::lock_guard<std::mutex> lock(m_job_mutex);
     m_current_job = job; // Zastępujemy starą pracę nową
-    
-    // Logowanie (opcjonalne, ale przydatne)
-    // std::cout << std::format("[Worker {}] Otrzymałem nową pracę: {}\n", m_id, job.job_id);
+
+    // Logowanie (opcjonalne, ale przydatne, jeśli chcesz zobaczyć WSZYSTKIE wątki)
+    // std::cout << fmt::format("[Worker {}] Otrzymałem nową pracę: {}\n", m_id, job.job_id);
 }
 
 /**
@@ -77,11 +77,16 @@ void MinerWorker::run(std::stop_token stoken) {
             if (m_current_job) {
                 local_job = m_current_job;
                 m_current_job.reset();
-                nonce = 0;
+                nonce = 0; // Resetujemy nonce dla nowej pracy
+
+                // --- DODANO LOGOWANIE ---
+                std::cout << fmt::format("[Worker {}] Rozpoczynam pracę nad {}\n", m_id, local_job->job_id);
+                // ---
             }
         }
 
         if (!local_job) {
+            // Jeśli nie ma pracy, śpij krótko, aby nie marnować CPU
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
@@ -92,10 +97,11 @@ void MinerWorker::run(std::stop_token stoken) {
         // To jest wolna operacja, ale zdarza się rzadko (co kilka minut).
         if (local_job->seed_hash != current_seed_hex) {
             try {
+                // Logowanie 'updateSeed' jest teraz wewnątrz samej funkcji Hashera
                 hasher.updateSeed(local_job->seed_hash);
                 current_seed_hex = local_job->seed_hash;
             } catch (const std::exception& e) {
-                std::cerr << std::format("[Worker {}] Krytyczny błąd Hashera: {}\n", m_id, e.what());
+                std::cerr << fmt::format("[Worker {}] Krytyczny błąd Hashera: {}\n", m_id, e.what());
                 // W prawdziwym minerze, powinniśmy zatrzymać ten wątek
                 break; // Zatrzymaj pętlę
             }
@@ -106,31 +112,36 @@ void MinerWorker::run(std::stop_token stoken) {
 
         // Krok 3: Wykonaj prawdziwą weryfikację hasha
         if (check_hash_target_real(hash_result_hex, local_job->target)) {
-            std::cout << std::format("\n!!! [Worker {}] ZNALAZŁEM ROZWIĄZANIE !!!\n", m_id);
-            std::cout << std::format("    Hash: {}\n\n", hash_result_hex);
+            std::cout << fmt::format("\n!!! [Worker {}] ZNALAZŁEM ROZWIĄZANIE !!!\n", m_id);
+            std::cout << fmt::format("    Job:  {}\n", local_job->job_id);
+            std::cout << fmt::format("    Nonce: {}\n", nonce);
+            std::cout << fmt::format("    Hash: {}\n\n", hash_result_hex);
 
             Solution sol = {
-                local_job->job_id,
-                nonce,
-                hash_result_hex // Wysyłamy prawdziwy hash
+                    local_job->job_id,
+                    nonce,
+                    hash_result_hex // Wysyłamy prawdziwy hash
             };
 
             m_solution_callback(sol);
-            // Uwaga: W prawdziwym minerze powinniśmy tu poczekać na nową pracę,
-            // aby nie wysyłać wielu rozwiązań dla tego samego bloku.
-            // Dla prostoty, po prostu kontynuujemy.
+
+            // Po znalezieniu rozwiązania, natychmiast przestajemy pracować
+            // nad tym blokiem i czekamy na nową pracę
+            local_job.reset();
         }
 
         // --- KONIEC SERCA MINERA ---
 
         nonce++;
 
-        if (nonce % 256 == 0) { // Możemy sprawdzać rzadziej niż co 1024
+        // Sprawdzamy token zatrzymania co 256 haszy,
+        // aby nie sprawdzać go w każdej iteracji (co spowalnia)
+        if (nonce % 256 == 0) {
             if (stoken.stop_requested()) {
                 break;
             }
         }
     }
 
-    std::cout << std::format("[Worker {}] Zatrzymany.\n", m_id);
+    std::cout << fmt::format("[Worker {}] Zatrzymany.\n", m_id);
 }

@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <iostream>
 #include <cstring> // Dla std::memcpy
+#include <fmt/core.h> // <-- DODANO
+#include <thread>
 
 RandomXHasher::RandomXHasher() {
     // Inicjalizujemy Cache
@@ -12,12 +14,7 @@ RandomXHasher::RandomXHasher() {
         throw std::runtime_error("Nie udało się zaalokować RandomX Cache");
     }
 
-    // Inicjalizujemy VM w trybie "light" (używa tylko Cache)
-    // RANDOMX_FLAG_LIGHT | RANDOMX_FLAG_JIT | RANDOMX_FLAG_HARD_AES
-    m_vm = randomx_create_vm(RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_JIT, m_cache, nullptr);
-    if (!m_vm) {
-        throw std::runtime_error("Nie udało się stworzyć RandomX VM");
-    }
+    // m_vm zostanie stworzone w updateSeed, gdy będziemy mieli seed.
 }
 
 RandomXHasher::~RandomXHasher() {
@@ -36,34 +33,59 @@ void RandomXHasher::updateSeed(const std::string& seed_hash_hex) {
         return;
     }
 
-    std::cout << "[Hasher] Aktualizuję seed RandomX..." << std::endl;
+    // Jeśli seed jest pusty, pula jeszcze go nie przysłała lub jest błąd
+    if (seed_hash_hex.empty()) {
+        std::cerr << "[Hasher] Błąd: Otrzymano pusty seed_hash.\n";
+        return;
+    }
+
+    // --- ZMIANA: Dodano ID wątku do logu, aby uniknąć "poszarpanych" logów ---
+    std::cout << "[Hasher wątek: " << std::this_thread::get_id() << "] Aktualizuję seed RandomX...\n";
+    // ---
+
     auto seed_bytes = hex_to_bytes(seed_hash_hex);
+
+    // Sprawdzenie, czy seed ma poprawną długość (powinien mieć 32 bajty)
+    if (seed_bytes.size() != 32) {
+        std::cerr << "[Hasher wątek: " << std::this_thread::get_id() << "] Błąd: seed_hash ma nieprawidłową długość.\n";
+        return;
+    }
 
     // Inicjalizujemy Cache nowym seedem
     // To jest wolna operacja (ok. 1-2 sekund)
     randomx_init_cache(m_cache, seed_bytes.data(), seed_bytes.size());
 
     // Musimy "przeładować" VM nowym Cache
-    // (W trybie light, VM musi być po prostu poinformowany o zmianie cache)
-    // Najprościej jest go odtworzyć
-    randomx_destroy_vm(m_vm);
+
+    // Jeśli VM już istnieje, zniszcz je
+    if (m_vm) {
+        randomx_destroy_vm(m_vm);
+    }
+
+    // Stwórz (lub odtwórz) VM przy użyciu ZAINICJALIZOWANEGO cache
     m_vm = randomx_create_vm(RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_JIT, m_cache, nullptr);
     if (!m_vm) {
         throw std::runtime_error("Nie udało się odtworzyć VM po zmianie seeda");
     }
-    
+
     m_current_seed_hex = seed_hash_hex;
-    std::cout << "[Hasher] Seed zaktualizowany.\n";
+    std::cout << "[Hasher wątek: " << std::this_thread::get_id() << "] Seed zaktualizowany na : "<< m_current_seed_hex <<"\n";
 }
 
 std::string RandomXHasher::hash(const std::string& blob_hex, uint32_t nonce) {
+    // Nie próbuj haszować, jeśli VM nie jest gotowe (bo np. seed był zły)
+    if (!m_vm) {
+        return "0000000000000000000000000000000000000000000000000000000000000000";
+    }
+
     auto blob_bytes = hex_to_bytes(blob_hex);
 
     // --- KRYTYCZNY KROK: WSTRZYKNIĘCIE NONCE ---
     // W protokole Monero, pula rezerwuje 4 bajty na nonce.
     // Zazwyczaj jest to na pozycji 39.
     if (blob_bytes.size() < 43) { // 39 + 4
-        throw std::runtime_error("Blob jest za krótki, by wstrzyknąć nonce");
+        // To nie powinno się zdarzyć, jeśli pula działa poprawnie
+        return "0000000000000000000000000000000000000000000000000000000000000000";
     }
     // Kopiujemy 4 bajty 'nonce' do bloba
     std::memcpy(blob_bytes.data() + 39, &nonce, sizeof(uint32_t));
