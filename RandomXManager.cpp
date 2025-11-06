@@ -6,7 +6,7 @@
 
 RandomXManager::RandomXManager() {
     // Flagi: JIT, Hard AES (domyślne), Wielkie Strony
-    randomx_flags flags = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_JIT | RANDOMX_FLAG_LARGE_PAGES;
+    randomx_flags flags = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_JIT | RANDOMX_FLAG_LARGE_PAGES | RANDOMX_FLAG_HARD_AES;
 
     m_cache = randomx_alloc_cache(flags);
     if (!m_cache) {

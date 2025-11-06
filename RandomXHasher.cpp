@@ -33,7 +33,7 @@ void RandomXHasher::create_vm(randomx_cache* cache, randomx_dataset* dataset) {
 
     // 2. Ustaw flagi dla VM (Tryb Szybki, JIT, Large Pages)
     // RANDOMX_FLAG_HARD_AES jest domyślnie włączone, jeśli CPU wspiera
-    randomx_flags vm_flags = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_JIT | RANDOMX_FLAG_FULL_MEM | RANDOMX_FLAG_LARGE_PAGES;
+    randomx_flags vm_flags = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_JIT | RANDOMX_FLAG_FULL_MEM | RANDOMX_FLAG_LARGE_PAGES | RANDOMX_FLAG_HARD_AES;
 
     // 3. Stwórz nową VM
     m_vm = randomx_create_vm(vm_flags, cache, dataset);
@@ -42,7 +42,7 @@ void RandomXHasher::create_vm(randomx_cache* cache, randomx_dataset* dataset) {
         {
             std::lock_guard<std::mutex> lock(g_cout_mutex);
             std::cerr << "[Hasher] KRYTYCZNY BŁĄD: Nie udało się utworzyć RandomX VM!\n";
-            std::cerr << "[Hasher] Sprawdź uprawnienia 'Large Pages' (gpedit.msc -> Lock pages in memory).\n";
+            std::cerr << "[Hasher] Sprawdź uprawnienia 'Large Pages' (secpol.msc -> Lock pages in memory).\n";
         }
         throw std::runtime_error("Nie udało się utworzyć RandomX VM");
     }

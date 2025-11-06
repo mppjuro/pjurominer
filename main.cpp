@@ -268,14 +268,14 @@ int main() {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    int num_threads = std::max(1u, std::thread::hardware_concurrency() / 2);
+    int num_threads = std::max(1u, std::thread::hardware_concurrency());
 
     std::cout << "--- Mój CPU Miner (Szkielet C++23) ---\n";
     std::cout << fmt::format(" Adres puli: {}:{}\n", POOL_HOST, POOL_PORT);
     std::cout << fmt::format(" Portfel: {}\n", YOUR_WALLET_ADDRESS);
     std::cout << fmt::format(" Uruchamiam {} wątków roboczych (1 na fizyczny rdzeń).\n", num_threads);
     std::cout << "\nWAŻNE: Upewnij się, że masz ustawione 'Large Pages' (Blokuj strony w pamięci)!\n";
-    std::cout << "Windows: 'gpedit.msc' -> Zasady Lokalne -> Przypisywanie praw -> 'Blokuj strony w pamięci' (i restart).\n";
+    std::cout << "Windows: 'secpol.msc' -> Zasady Lokalne -> Przypisywanie praw -> 'Blokuj strony w pamięci' (i restart).\n";
     std::cout << "Linux: 'sudo sysctl -w vm.nr_hugepages=...' (wymagane > 1100 stron 2MB).\n";
     std::cout << "\nNaciśnij 'q', aby zakończyć, 's' aby zobaczyć statystyki.\n\n";
 

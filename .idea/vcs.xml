@@ -9,5 +9,7 @@
     <mapping directory="$PROJECT_DIR$/cmake-build-debug-mingw/_deps/fmt-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-debug-mingw/_deps/nlohmann_json-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-debug-mingw/_deps/randomx-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-release-mingw/_deps/fmt-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-release-mingw/_deps/randomx-src" vcs="Git" />
   </component>
 </project>
