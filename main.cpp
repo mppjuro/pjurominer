@@ -8,8 +8,6 @@
 #include <string>
 #include <cstdio>
 #include <deque>
-#include <numeric>
-#include <iomanip>
 #include <sstream>
 #include "StratumClient.h"
 #include "MinerWorker.h"
@@ -270,10 +268,7 @@ int main() {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    // --- ZMIANA: Optymalna liczba wątków dla RandomX ---
-    // Dzielimy przez 2, aby uzyskać liczbę fizycznych rdzeni (1 wątek na rdzeń)
     int num_threads = std::max(1u, std::thread::hardware_concurrency() / 2);
-    // --- KONIEC ZMIANY ---
 
     std::cout << "--- Mój CPU Miner (Szkielet C++23) ---\n";
     std::cout << fmt::format(" Adres puli: {}:{}\n", POOL_HOST, POOL_PORT);
@@ -337,19 +332,51 @@ int main() {
         worker->start();
     }
 
+    // --- POCZĄTEK POPRAWKI 2 ---
+    // Uruchamiamy wątki, ale ich NIE odłączamy (bez .detach())
     std::thread input_thread(watch_stdin);
-    input_thread.detach();
-
     std::thread hashrate_thread(report_hashrate_loop, num_threads);
-    hashrate_thread.detach();
 
     client->connect();
-    io_context->run();
+    io_context->run(); // Ta linia blokuje, dopóki shutdown_miner() nie wywoła io_context->stop()
+
+    // --- Kod wykonywany po zatrzymaniu io_context ---
 
     {
         std::lock_guard<std::mutex> lock(g_cout_mutex);
-        std::cout << "Pętla sieciowa zatrzymana. Czekanie na wątki robocze...\n";
+        std::cout << "Pętla sieciowa zatrzymana. Czekanie na wątki pomocnicze...\n";
+    }
+
+    // shutdown_miner() ustawił is_shutting_down na true.
+    // Czekamy (join) na wątki pomocnicze, aż same się zakończą.
+    if (hashrate_thread.joinable()) {
+        hashrate_thread.join();
+    }
+    if (input_thread.joinable()) {
+        input_thread.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_cout_mutex);
+        std::cout << "Wątki pomocnicze zatrzymane. Czekanie na wątki robocze...\n";
+    }
+
+    // Teraz, gdy wątki pomocnicze są zatrzymane, możemy bezpiecznie
+    // zniszczyć wątki robocze.
+    // Wyczyszczenie wektora wywoła destruktory shared_ptr,
+    // co wywoła destruktory MinerWorker, co wywoła destruktory jthread,
+    // które z kolei wykonają 'join' na każdym wątku roboczym.
+    // Komunikaty "[Worker X] Zatrzymany." pojawią się tutaj.
+    workers.clear();
+
+    // --- KONIEC POPRAWKI 2 ---
+
+    {
+        std::lock_guard<std::mutex> lock(g_cout_mutex);
         std::cout << "Wszystkie wątki zatrzymane. Zamykanie.\n";
     }
     return 0;
+    // Teraz funkcja main() może bezpiecznie zwrócić. Wszystkie wątki
+    // są zakończone, więc nie będzie wyścigu przy niszczeniu
+    // globalnych zmiennych (jak g_cout_mutex).
 }

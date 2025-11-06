@@ -2,5 +2,12 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug-cygwin/_deps/asio-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug-cygwin/_deps/nlohmann_json-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug-cygwin/_deps/randomx-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug-mingw/_deps/asio-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug-mingw/_deps/fmt-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug-mingw/_deps/nlohmann_json-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug-mingw/_deps/randomx-src" vcs="Git" />
   </component>
 </project>

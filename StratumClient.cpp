@@ -144,12 +144,37 @@ void StratumClient::on_read(const asio::error_code& ec, std::size_t length) {
         return;
     }
 
+    // --- POCZĄTEK POPRAWKI ---
+    // Przetwarzamy bufor linia po linii, ponieważ mogło przyjść wiele wiadomości na raz.
     std::istream is(&m_buffer);
-    std::string message(std::istreambuf_iterator<char>(is), {});
-    std::string line = message.substr(0, length);
+    std::string line;
 
-    handle_message(line);
+    // std::getline() odczytuje linię z 'is' (co konsumuje ją z 'm_buffer')
+    // i zwraca true, jeśli się udało.
+    while (std::getline(is, line)) {
 
+        // Niektóre pule mogą wysyłać \r\n, std::getline usuwa \n, ale zostawia \r
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+
+        // Ignoruj puste linie (np. jeśli pula wysłała \n\n)
+        if (line.empty()) {
+            continue;
+        }
+
+        // Przetwórz pełną, czystą linię JSON
+        handle_message(line);
+
+        // Jeśli handle_message spowodowało błąd i zamknęło gniazdo, przerwij
+        if (!m_socket.is_open()) {
+            return;
+        }
+    }
+    // --- KONIEC POPRAWKI ---
+
+    // 'm_buffer' zawiera teraz tylko resztę (prawdopodobnie niekompletną)
+    // wiadomość. Kontynuujemy nasłuchiwanie.
     do_read();
 }
 
